@@ -1,5 +1,3 @@
-cd ~/deepvoice-detection
-cat > README.md << 'EOF'
 # 🎙️ DeepVoice Detection
 딥러닝 기반 보이스피싱 및 AI 합성 음성 탐지 시스템
 
@@ -20,9 +18,11 @@ pip install librosa numpy pandas scikit-learn matplotlib
 ```
 
 ## 프로젝트 구조
+```
 deepvoice-detection/
 ├── data/           # 음성 데이터 (gitignore)
 ├── preprocess/     # 전처리 코드
 ├── model/          # 딥러닝 모델
 ├── train.py        # 학습 스크립트
 └── inference.py    # 추론 스크립트
+```
