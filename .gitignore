@@ -6,3 +6,5 @@ data/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+Retrieval-based-Voice-Conversion-WebUI/
+so-vits-svc/
