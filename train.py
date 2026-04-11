@@ -24,8 +24,8 @@ class VoiceDataset(Dataset):
         return mel, label
 
 def load_data():
-    real_dir = "data/real"
-    fake_dir = "data/fake"
+    real_dir = "data/real_normalized"
+    fake_dir = "data/fake_normalized"
     
     file_paths, labels = [], []
     
