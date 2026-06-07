@@ -1,109 +1,123 @@
-import torch
+import os, glob, random, torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import os
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import f1_score, accuracy_score
-from preprocess.feature_extract import extract_melspectrogram
-from model.cnn_classifier import DeepVoiceCNN
+from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import f1_score, precision_score, recall_score
+import wandb
+from model import LCNN
 
-class VoiceDataset(Dataset):
-    def __init__(self, file_paths, labels):
-        self.file_paths = file_paths
-        self.labels = labels
+
+class PTDataset(Dataset):
+    def __init__(self, real_files, fake_files):
+        self.files = [(f, 0) for f in real_files] + [(f, 1) for f in fake_files]
+        random.shuffle(self.files)
 
     def __len__(self):
-        return len(self.file_paths)
+        return len(self.files)
 
     def __getitem__(self, idx):
-        mel = extract_melspectrogram(self.file_paths[idx])
-        mel = torch.FloatTensor(mel).unsqueeze(0)  # (1, 128, 128)
-        label = self.labels[idx]
+        path, label = self.files[idx]
+        mel = torch.load(path)
+        if mel.dim() == 2:
+            mel = mel.unsqueeze(0)
         return mel, label
 
-def load_data():
-    real_dir = "data/real_normalized"
-    fake_dir = "data/fake_normalized"
-    
-    file_paths, labels = [], []
-    
-    # 실제 음성 (label=0)
-    for f in os.listdir(real_dir):
-        if f.endswith('.wav') or f.endswith('.mp3'):
-            file_paths.append(os.path.join(real_dir, f))
-            labels.append(0)
-    
-    # 합성 음성 (label=1)
-    for f in os.listdir(fake_dir):
-        if f.endswith('.wav') or f.endswith('.mp3'):
-            file_paths.append(os.path.join(fake_dir, f))
-            labels.append(1)
-    
-    print(f"실제 음성: {labels.count(0)}개")
-    print(f"합성 음성: {labels.count(1)}개")
-    return file_paths, labels
 
-def train():
-    # 데이터 로드
-    file_paths, labels = load_data()
-    
-    # 학습/검증 분리 (8:2)
-    X_train, X_val, y_train, y_val = train_test_split(
-        file_paths, labels, test_size=0.2, random_state=42, stratify=labels
+def pad_collate(batch):
+    mels, labels = zip(*batch)
+    max_len = max(m.shape[-1] for m in mels)
+    padded = torch.zeros(len(mels), 1, mels[0].shape[1], max_len)
+    for i, m in enumerate(mels):
+        padded[i, 0, :, :m.shape[-1]] = m[0] if m.dim() == 3 else m
+    return padded, torch.tensor(labels)
+
+
+def train(config):
+    LOCAL = config["data_dir"]
+    DRIVE = "/content/drive/MyDrive/deepvoice"
+
+    real_train = glob.glob(f"{LOCAL}/real_train/*.pt")
+    real_val   = glob.glob(f"{LOCAL}/real_val/*.pt")
+    fake_train = (
+        glob.glob(f"{LOCAL}/fake_train_sampled/*.pt") +
+        glob.glob(f"{LOCAL}/elevenlabs_train/*.pt") +
+        glob.glob(f"{LOCAL}/elevenlabs_train_add2/*.pt") +
+        glob.glob(f"{LOCAL}/elevenlabs_train_add3/*.pt")
     )
-    
-    train_dataset = VoiceDataset(X_train, y_train)
-    val_dataset = VoiceDataset(X_val, y_val)
-    
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
-    
-    # 모델, 손실함수, 옵티마이저
-    model = DeepVoiceCNN()
+    fake_val = (
+        glob.glob(f"{LOCAL}/fake_val/*.pt") +
+        glob.glob(f"{LOCAL}/elevenlabs_val/*.pt")
+    )
+
+    print(f"train - real: {len(real_train)}, fake: {len(fake_train)}")
+    print(f"val   - real: {len(real_val)}, fake: {len(fake_val)}")
+
+    train_loader = DataLoader(PTDataset(real_train, fake_train),
+                              batch_size=32, shuffle=True, num_workers=4, collate_fn=pad_collate)
+    val_loader   = DataLoader(PTDataset(real_val, fake_val),
+                              batch_size=32, shuffle=False, num_workers=4, collate_fn=pad_collate)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = LCNN().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    
-    # 학습
-    epochs = 30
+
+    wandb.init(project="deepvoice", name=config["run_name"])
     best_f1 = 0
-    
-    for epoch in range(epochs):
+
+    for epoch in range(config["epochs"]):
         model.train()
         train_loss = 0
-        
-        for mels, labels_batch in train_loader:
+        for step, (mel, label) in enumerate(train_loader):
+            mel, label = mel.to(device), label.to(device)
             optimizer.zero_grad()
-            outputs = model(mels)
-            loss = criterion(outputs, labels_batch)
+            out = model(mel)
+            loss = criterion(out, label)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
-        
-        # 검증
+            if (step + 1) % 100 == 0:
+                print(f"Epoch {epoch+1} | Step {step+1}/{len(train_loader)} | loss: {loss.item():.4f}")
+                wandb.log({"step_loss": loss.item()})
+
         model.eval()
         all_preds, all_labels = [], []
-        
+        val_loss = 0
         with torch.no_grad():
-            for mels, labels_batch in val_loader:
-                outputs = model(mels)
-                preds = torch.argmax(outputs, dim=1)
-                all_preds.extend(preds.numpy())
-                all_labels.extend(labels_batch.numpy())
-        
-        acc = accuracy_score(all_labels, all_preds)
-        f1 = f1_score(all_labels, all_preds, average='binary')
-        
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {train_loss/len(train_loader):.4f} | Acc: {acc:.4f} | F1: {f1:.4f}")
-        
-        # 최고 모델 저장
+            for mel, label in val_loader:
+                mel, label = mel.to(device), label.to(device)
+                out = model(mel)
+                val_loss += criterion(out, label).item()
+                preds = torch.argmax(out, dim=1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(label.cpu().numpy())
+
+        acc = np.mean(np.array(all_preds) == np.array(all_labels))
+        f1  = f1_score(all_labels, all_preds)
+        pr  = precision_score(all_labels, all_preds)
+        rc  = recall_score(all_labels, all_preds)
+
+        wandb.log({"train_loss": train_loss/len(train_loader),
+                   "val_loss": val_loss/len(val_loader),
+                   "val_acc": acc, "val_f1": f1,
+                   "val_precision": pr, "val_recall": rc,
+                   "epoch": epoch+1})
+
+        print(f"Epoch {epoch+1}/{config['epochs']} | loss: {train_loss/len(train_loader):.4f} | val_acc: {acc:.4f} | val_f1: {f1:.4f}")
+
         if f1 > best_f1:
             best_f1 = f1
-            torch.save(model.state_dict(), "model/best_model.pt")
-            print(f"모델 저장 (F1: {f1:.4f})")
-    
-    print(f"학습 완료! 최고 F1: {best_f1:.4f}")
+            torch.save(model.state_dict(), f"{DRIVE}/best_model_tts_v6.pt")
+            print(f"  → best model 저장 (f1: {f1:.4f})")
+
+    wandb.finish()
+    print(f"학습 완료 | best f1: {best_f1:.4f}")
+
 
 if __name__ == "__main__":
-    train()
+    config = {
+        "data_dir": "/content/features",
+        "run_name": "tts_lcnn_v6",
+        "epochs": 30,
+    }
+    train(config)
