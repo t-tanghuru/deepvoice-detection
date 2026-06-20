@@ -1,10 +1,32 @@
-data/
-*.wav
-*.mp3
+# checkpoints / models
 *.pt
 *.pth
+*.ckpt
+*.onnx
+
+# audio files
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# features / data
+whisper_features/
+features/
+data/
+datasets/
+results/
+*.npy
+*.npz
+
+# secrets
+api_keys.json
+*.key
+.env
+
+# python
 __pycache__/
 *.pyc
+
+# notebook checkpoints
 .ipynb_checkpoints/
-Retrieval-based-Voice-Conversion-WebUI/
-so-vits-svc/
