@@ -3,9 +3,9 @@
 This repository contains the AI model code used for a DeepVoice detection project.
 The project covers both TTS-based synthetic speech detection and RVC-based voice conversion detection.
 
-This repository includes model definitions, training scripts, evaluation scripts, single-audio prediction scripts, and a log-Mel gradient heatmap script.
+This repository includes model definitions, training scripts, evaluation scripts, single-audio prediction scripts, Colab notebooks, and a log-Mel gradient heatmap script.
 
-> Model checkpoints (`.pt`), raw audio data, feature files, and API keys are not uploaded to GitHub because of file size and security limitations.
+> Model checkpoints (`.pt`), raw audio data, extracted feature files, and API keys are not uploaded to GitHub because of file size and security limitations.
 
 ## 1. Final Model Architecture
 
@@ -108,6 +108,8 @@ To reduce this risk, similar augmentation was also applied to real speech, and t
 | `model/scripts/evaluate_whisper_encoder.py` | TTS/RVC evaluation script with F1, EER, and min-DCF |
 | `model/scripts/predict_whisper_encoder.py` | Whisper encoder-based single-audio prediction script |
 | `model/scripts/logmel_gradient_heatmap_whisper_encoder.py` | Generates an input log-Mel gradient heatmap |
+| `notebooks/rvc_whisper_encoder_retrain_colab.ipynb` | Colab notebook for RVC retraining and evaluation |
+| `notebooks/rvc_result_viewer_colab.ipynb` | Colab notebook for summarizing RVC result files |
 
 ## 6. Single Audio Prediction Example
 
@@ -121,7 +123,14 @@ python model/scripts/predict_whisper_encoder.py input.wav   --model-path /path/t
 python model/scripts/evaluate_whisper_encoder.py   --data-dir /path/to/whisper_features   --model-path /path/to/best_model_tts_whisper_encoder_lcnn.pt   --real-dirs real_val   --fake-dirs fake_val,elevenlabs_val,holdout_v2   --batch-size 32   --num-workers 0
 ```
 
-## 8. Limitations and Future Work
+## 8. RVC Notebook Workflow
+
+The RVC workflow is documented in the Colab notebooks under `notebooks/`.
+
+- `rvc_whisper_encoder_retrain_colab.ipynb`: creates balanced RVC train/validation splits, trains the Whisper encoder + LCNN-style classifier model, and evaluates holdout RVC speakers.
+- `rvc_result_viewer_colab.ipynb`: reads saved evaluation text files and summarizes F1, EER, normalized min-DCF, and confusion matrices.
+
+## 9. Limitations and Future Work
 
 - Current results are based on self-built datasets and self-built holdout sets.
 - Evaluation with public spoofing datasets such as ASVspoof, ADD, and CFAD is needed.
