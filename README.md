@@ -1,138 +1,91 @@
 # DeepVoice Detection
 
-This repository contains the AI model code used for a DeepVoice detection project.
-The project covers both TTS-based synthetic speech detection and RVC-based voice conversion detection.
+웹 기반 딥보이스 판별 시스템 — TTS 합성음성 및 RVC 변조음성 vs 실제음성 탐지 모델
 
-This repository includes model definitions, training scripts, evaluation scripts, single-audio prediction scripts, Colab notebooks, and a log-Mel gradient heatmap script.
+Whisper base encoder representation을 LCNN-style classifier로 분류하는 구조로, TTS 합성음성과 RVC 변조음성을 각각 독립적으로 탐지합니다.
 
-> Model checkpoints (`.pt`), raw audio data, extracted feature files, and API keys are not uploaded to GitHub because of file size and security limitations.
+## 모델 구조
 
-## 1. Final Model Architecture
+- 아키텍처: Whisper base encoder + LCNN-style classifier
+- 입력 흐름: Audio → Whisper-compatible log-Mel → Whisper base encoder → encoder representation → classifier
+- log-Mel은 단독 분류 특징이 아니라 Whisper encoder의 입력 형식으로만 사용하며, 실제 분류에는 encoder representation을 사용
+- TTS 탐지 모델과 RVC 탐지 모델은 각각 독립적인 이진 분류기 (하나의 다중분류기가 아님)
+- 학습 설정: Adam, lr=1e-4 / TTS 30 epoch, RVC 10 epoch
+- 운영 threshold: TTS 0.28, RVC 0.20 (내부 판정 기준)
+- 평가 지표: F1-score, EER, normalized min-DCF, holdout 성능
 
-The final model combines a Whisper base encoder with an LCNN-style classifier.
+## 성능
 
-```text
-Audio
--> 16 kHz mono
--> Whisper-compatible log-Mel spectrogram
--> Whisper base encoder
--> encoder representation
--> LCNN-style classifier
--> REAL / FAKE
-```
+### TTS 탐지
 
-The log-Mel spectrogram is not used as the final classification feature by itself.
-It is used as the input format for the Whisper base encoder.
-The classifier uses the encoder representation produced by the Whisper encoder.
+| 평가 구분 | Real 데이터 | Fake 데이터 | F1 | EER | norm. min-DCF |
+| --- | --- | --- | --- | --- | --- |
+| 기본 평가 | real_val 4,445 | fake 평가셋 1,289 | 1.0000 | 0.00% | 0.0000 |
+| 실제음성 holdout | real_raw_holdout 3,780 | fake 평가셋 1,289 | 0.9996 | 0.01% | 0.0003 |
 
-## 2. Final Evaluation Summary
+기본 평가의 F1 1.0000은 해당 검증셋에서 real/fake score 분포가 완전히 분리되어 산출된 값이므로, 일반 환경에서 오류가 없다는 의미로 해석하지 않습니다. 학습에 사용하지 않은 real_raw_holdout을 별도로 평가하여 일반화 성능을 보완적으로 확인하였습니다.
 
-### 2.1 TTS Detection Model
+### RVC 변환음성 탐지
 
-- Model: `best_model_tts_whisper_encoder_lcnn.pt`
-- Operating threshold: `0.28`
-- Validation F1: `1.0000`
-- Validation EER: `0.00%`
-- Validation normalized min-DCF: `0.0000`
-- Separate holdout evaluation: `real_raw_holdout` 3,780 files + fake evaluation set 1,289 files
-- Separate holdout F1: `0.9996`
-- Separate holdout EER: `0.01%`
-- Separate holdout normalized min-DCF: `0.0003`
+| 평가 구분 | Real 데이터 | RVC 데이터 | F1 | EER | norm. min-DCF |
+| --- | --- | --- | --- | --- | --- |
+| Validation | rvc_real_val 200 | KANE·Nell_V2 val 200 | 1.0000 | 0.00% | 0.0000 |
+| Joonjong holdout | real_raw_holdout 3,780 | Joonjong 541 | 0.9881 | 0.00% | 0.0000 |
+| NELL_KLM43x4 holdout | real_raw_holdout 3,780 | NELL_KLM43x4 566 | 0.9886 | 0.18% | 0.0019 |
+| 통합 holdout | real_raw_holdout 3,780 | Joonjong + NELL_KLM43x4 1,107 | 0.9942 | 0.12% | 0.0019 |
 
-The validation F1 of 1.0000 and EER of 0.00% mean that the real/fake score distributions were completely separated on that validation set.
-This does not mean that the model has zero error in all real-world environments.
-Therefore, an additional evaluation was performed using `real_raw_holdout`, which was not used for training.
+RVC 탐지 모델은 TTS 탐지와 동일한 Whisper encoder + LCNN-style classifier 구조로 별도 재학습하였습니다.
 
-### 2.2 RVC Detection Model
+## 데이터 구성
 
-- Model: `best_model_rvc_whisper_encoder_lcnn.pt`
-- Evaluation threshold: `0.20`
-- Validation F1: `1.0000`
-- Validation EER: `0.00%`
-- Validation normalized min-DCF: `0.0000`
-- Combined Joonjong + NELL_KLM43x4 holdout F1: `0.9942`
-- Combined holdout EER: `0.12%`
-- Combined holdout normalized min-DCF: `0.0019`
-- Combined holdout best threshold scan: `0.35`
+### Real (실제 음성)
 
-The RVC detection model was separately retrained using the same Whisper encoder + LCNN-style classifier structure.
-The RVC result is based on a self-built RVC dataset.
-Evaluation on public VC datasets remains future work.
+- 출처: AIHub 자유대화 음성 (일반남여)
+- 수량: real_sampled 30,000 / real_val 4,445 / real_raw_holdout 3,780
+- 전처리: 16 kHz mono 정규화, 화자 단위 분리
+- 증강: MP3 압축·전화음질·노이즈·속도·볼륨 (real/fake 균형을 위해 real에도 동일 계열 적용)
+- 최종 학습 입력: real_sampled 증강 feature 38,501
 
-## 3. Dataset Summary
+### Fake (합성·변조 음성)
 
-### 3.1 Real Speech
+- TTS: Edge TTS·gTTS (fake_train 23,031) + ElevenLabs 다화자 계열을 합쳐 총 38,501로 구성
+- TTS 평가셋: fake_val 639 + elevenlabs_val 260 + holdout_v2 390 = 1,289
+- RVC: rvc_fake_train_kane_nell 800 + rvc_real_train_balanced 800 (학습), rvc_fake_val_kane_nell 200 + rvc_real_val_balanced 200 (검증)
+- RVC holdout: Joonjong 541, NELL_KLM43x4 566 (학습 미사용)
 
-- AIHub free conversation speech data
-- `real_sampled`: 30,000 real speech files for training
-- `real_val`: 4,445 real speech files for validation
-- `real_raw_holdout`: 3,780 real speech files not used for training
-- Real training data was augmented with MP3 compression, telephone-quality conversion, noise, speed change, and volume change.
+최종 TTS 학습은 real 증강 입력과 fake 증강 입력을 각각 38,501로 맞추어 균형화한 뒤 진행하였습니다.
 
-### 3.2 TTS Synthetic Speech
-
-- Edge TTS, gTTS, and ElevenLabs synthetic speech data
-- Final fake training features: 38,501 files
-- Fake evaluation set: `fake_val` 639 + `elevenlabs_val` 260 + `holdout_v2` 390 = 1,289 files
-
-### 3.3 RVC Voice Conversion Data
-
-- Training and validation: `vc_fake/KANE`, `vc_fake/Nell_V2`
-- Holdout: `vc_holdout/Joonjong` 541 files, `vc_holdout/NELL_KLM43x4` 566 files
-
-## 4. Preprocessing and Augmentation
-
-Preprocessing was designed not as arbitrary manipulation, but as a way to unify input conditions and simulate real service environments.
-
-- 16 kHz mono conversion: unifies sampling rate and audio channel format
-- MP3 compression: simulates lossy compressed audio uploaded by users
-- Telephone-quality conversion: simulates an 8 kHz band-limited call environment
-- Noise addition: reflects background noise in recording environments
-- Speed change: reflects speech rate variation
-- Volume change: reflects input loudness variation
-
-At an earlier stage, augmentation was applied mainly to fake data.
-This could cause shortcut learning, where the model learns audio quality differences instead of synthetic speech characteristics.
-To reduce this risk, similar augmentation was also applied to real speech, and the final real/fake training feature counts were balanced at 38,501 each.
-
-## 5. Main Files
-
-| File | Purpose |
-|---|---|
-| `model/model.py` | Defines MFM, LCNN, and WhisperEncoderLCNN models |
-| `model/scripts/extract_features.py` | Audio preprocessing and Whisper-compatible log-Mel generation |
-| `model/scripts/train.py` | Legacy LCNN training script |
-| `model/scripts/evaluate.py` | Legacy LCNN evaluation script |
-| `model/scripts/predict.py` | Legacy LCNN single-audio prediction script |
-| `model/scripts/train_whisper_encoder.py` | Whisper encoder-based TTS/RVC model training script |
-| `model/scripts/evaluate_whisper_encoder.py` | TTS/RVC evaluation script with F1, EER, and min-DCF |
-| `model/scripts/predict_whisper_encoder.py` | Whisper encoder-based single-audio prediction script |
-| `model/scripts/logmel_gradient_heatmap_whisper_encoder.py` | Generates an input log-Mel gradient heatmap |
-| `notebooks/rvc_whisper_encoder_retrain_colab.ipynb` | Colab notebook for RVC retraining and evaluation |
-| `notebooks/rvc_result_viewer_colab.ipynb` | Colab notebook for summarizing RVC result files |
-
-## 6. Single Audio Prediction Example
+## 설치
 
 ```bash
-python model/scripts/predict_whisper_encoder.py input.wav   --model-path /path/to/best_model_tts_whisper_encoder_lcnn.pt   --threshold 0.28
+pip install -r requirements.txt
 ```
 
-## 7. Evaluation Example
+## 사용법
+
+### 단일 파일 추론
 
 ```bash
-python model/scripts/evaluate_whisper_encoder.py   --data-dir /path/to/whisper_features   --model-path /path/to/best_model_tts_whisper_encoder_lcnn.pt   --real-dirs real_val   --fake-dirs fake_val,elevenlabs_val,holdout_v2   --batch-size 32   --num-workers 0
+python predict.py audio.mp3
 ```
 
-## 8. RVC Notebook Workflow
+### 학습
 
-The RVC workflow is documented in the Colab notebooks under `notebooks/`.
+```bash
+python train.py
+```
 
-- `rvc_whisper_encoder_retrain_colab.ipynb`: creates balanced RVC train/validation splits, trains the Whisper encoder + LCNN-style classifier model, and evaluates holdout RVC speakers.
-- `rvc_result_viewer_colab.ipynb`: reads saved evaluation text files and summarizes F1, EER, normalized min-DCF, and confusion matrices.
+### 평가
 
-## 9. Limitations and Future Work
+```bash
+python evaluate.py
+```
 
-- Current results are based on self-built datasets and self-built holdout sets.
-- Evaluation with public spoofing datasets such as ASVspoof, ADD, and CFAD is needed.
-- Additional unseen TTS/VC engines and real call-recording conditions should be tested.
-- For web deployment, formal concurrent-user load testing and long-running monitoring are still needed.
+## 관련 저장소
+
+- 웹 (프론트엔드·백엔드): https://github.com/jeonghanhee/deepvoice-detection-web
+
+## 한계 및 향후 계획
+
+- 현재 평가는 자체 구축 데이터셋과 자체 holdout 기준이므로, ASVspoof·ADD·CFAD 등 공인 데이터셋 기반 비교 평가가 필요합니다.
+- RVC holdout(Joonjong, NELL_KLM43x4)도 자체 구축 변환 음성 기준이므로, 다양한 unseen TTS·VC 엔진에 대한 일반화 검증이 후속 과제로 남아 있습니다.
